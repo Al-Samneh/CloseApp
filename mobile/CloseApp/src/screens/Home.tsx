@@ -15,6 +15,8 @@ type DeviceItem = {
   compatibilityScore?: number;
   compatibilityExplanation?: string;
   isChecking?: boolean;
+  pendingSessionId?: string;
+  lastSeen: number; // timestamp of last update
 };
 
 export default function Home() {
@@ -27,6 +29,7 @@ export default function Home() {
   const [myEphemeralId, setMyEphemeralId] = useState<string>('');
   const [incomingRequest, setIncomingRequest] = useState<LinkRequest | null>(null);
   const linkRequestManager = useRef<LinkRequestManager>(new LinkRequestManager());
+  const cleanupTimerRef = useRef<NodeJS.Timeout | null>(null);
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
@@ -45,7 +48,12 @@ export default function Home() {
         setMyProfile(compatProfile);
       }
     })();
-    return () => ble?.stop();
+    return () => {
+      ble?.stop();
+      if (cleanupTimerRef.current) {
+        clearInterval(cleanupTimerRef.current);
+      }
+    };
   }, []);
 
   const toggle = async () => {
@@ -55,6 +63,13 @@ export default function Home() {
       if (scanning) {
         ble?.stop();
         linkRequestManager.current.disconnect(); // Disconnect from link requests
+        
+        // Clear cleanup timer
+        if (cleanupTimerRef.current) {
+          clearInterval(cleanupTimerRef.current);
+          cleanupTimerRef.current = null;
+        }
+        
         setScanning(false);
         setErrorMsg('');
         // Don't clear items - keep them for reference
@@ -70,15 +85,16 @@ export default function Home() {
       setBle(orch);
       orch.start({ age: p.age, sex: p.sex as any, preferences: { gender: p.preference.gender as any, age_min: p.preference.age_min, age_max: p.preference.age_max }, interests: p.interests }, disc => {
         const id = Buffer.from(disc.payload.slice(1, 9)).toString('hex').slice(0, 12);
+        const now = Date.now();
         
         setItems(prev => {
           const existing = prev.find(x => x.id === id);
           if (existing) {
-            // Update RSSI but keep all other data (compatibility, etc.)
-            return prev.map(x => x.id === id ? { ...x, rssi: disc.rssi } : x);
+            // Update RSSI and lastSeen, keep all other data (compatibility, etc.)
+            return prev.map(x => x.id === id ? { ...x, rssi: disc.rssi, lastSeen: now } : x);
           } else {
             // New device - add to top of list
-            return [{ id, rssi: disc.rssi }, ...prev].slice(0, 50);
+            return [{ id, rssi: disc.rssi, lastSeen: now }, ...prev].slice(0, 50);
           }
         });
       });
@@ -104,16 +120,26 @@ export default function Home() {
           },
           (sessionId) => {
             // Someone accepted our request!
+            console.log('🎉 Our request was accepted! Session ID:', sessionId);
             Alert.alert(
               '✅ Accepted!',
               'They accepted your link request!',
               [
-                { text: 'Go to Chat', onPress: () => nav.navigate('Chat' as never, { sessionId } as never) }
+                { text: 'Go to Chat', onPress: () => {
+                  console.log('📱 Sender navigating to chat with session:', sessionId);
+                  nav.navigate('Chat' as never, { sessionId } as never);
+                }}
               ]
             );
           }
         );
       }, 100);
+      
+      // Start cleanup timer - remove devices not seen in 3 seconds
+      cleanupTimerRef.current = setInterval(() => {
+        const now = Date.now();
+        setItems(prev => prev.filter(item => now - item.lastSeen < 3000));
+      }, 1000);
       
       setScanning(true);
     } catch (err: any) {
@@ -192,8 +218,16 @@ export default function Home() {
           text: 'Send Request',
           onPress: () => {
             try {
-              console.log('📤 Sending link request to:', id, 'from:', myEphemeralId);
-              linkRequestManager.current.sendLinkRequest(id, id);
+              // Generate a unique session ID for this chat
+              const uniqueSessionId = `${myEphemeralId}-${id}-${Date.now()}`;
+              console.log('📤 Sending link request to:', id, 'from:', myEphemeralId, 'session:', uniqueSessionId);
+              linkRequestManager.current.sendLinkRequest(id, uniqueSessionId);
+              
+              // Save this session ID so we can join when they accept
+              setItems(prev => prev.map(item => 
+                item.id === id ? { ...item, pendingSessionId: uniqueSessionId } : item
+              ));
+              
               Alert.alert('✅ Request Sent!', 'Waiting for them to accept...');
             } catch (error) {
               console.error('Failed to send link request:', error);
@@ -208,10 +242,13 @@ export default function Home() {
   const handleAcceptRequest = (request: LinkRequest) => {
     setIncomingRequest(null);
     
+    console.log('✅ Accepting request, session ID:', request.from_session_id);
+    
     // Notify the sender that we accepted
     linkRequestManager.current.respondToRequest(request.from_ephemeral_id, true, request.from_session_id);
     
     // Navigate to chat with the session ID from the request
+    console.log('📱 Navigating to chat with session:', request.from_session_id);
     nav.navigate('Chat' as never, { sessionId: request.from_session_id } as never);
   };
 

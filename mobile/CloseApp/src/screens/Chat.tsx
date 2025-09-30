@@ -1,9 +1,10 @@
 import 'react-native-get-random-values';
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, StyleSheet, FlatList, Alert, KeyboardAvoidingView, Platform, TouchableOpacity } from 'react-native';
+import { View, Text, TextInput, StyleSheet, FlatList, Alert, KeyboardAvoidingView, Platform, TouchableOpacity, Linking } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RouteProp, useRoute } from '@react-navigation/native';
-import { RelayClient } from '../network/ws';
+import { RelayClient, type RelayMessage } from '../network/ws';
+import { loadProfile } from '../storage/profile';
 import nacl from 'tweetnacl';
 import { sha256 } from '@noble/hashes/sha256';
 
@@ -17,18 +18,45 @@ export default function Chat() {
   const [messages, setMessages] = useState<{ id: string; from: 'me' | 'peer'; text: string }[]>([]);
   const [keyPair] = useState(() => nacl.box.keyPair());
   const [sessionKey, setSessionKey] = useState<Uint8Array | null>(null);
+  const [myName, setMyName] = useState<string>('');
+  const [peerName, setPeerName] = useState<string | null>(null);
+  const [myInstagram, setMyInstagram] = useState<string | null>(null);
+  const [peerInstagram, setPeerInstagram] = useState<string | null>(null);
+  const [showInstagram, setShowInstagram] = useState(false);
+  const [myWantsToClose, setMyWantsToClose] = useState(false);
+  const [peerWantsToClose, setPeerWantsToClose] = useState(false);
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
+    console.log('💬 Joining chat session:', sessionId);
+    
+    // Load our profile to get Instagram
+    loadProfile().then(profile => {
+      if (profile?.socials_encrypted) {
+        setMyInstagram(profile.socials_encrypted);
+      }
+    });
+    
     const client = new RelayClient('ws://192.168.1.216:8080/ws/' + sessionId);
-    client.connect(raw => {
+    client.connect(relayMsg => {
       try {
-        const ev = JSON.parse(raw as any);
+        // Parse the ciphertext field to get the actual message
+        const ev = JSON.parse(relayMsg.ciphertext);
+        console.log('📨 Received chat event:', ev.type);
         if (ev.type === 'pubkey') {
+          console.log('🔑 Received peer public key, establishing session');
           const peerPub = Uint8Array.from(Buffer.from(ev.key, 'base64'));
           const shared = nacl.scalarMult(keyPair.secretKey, peerPub);
           const key = Uint8Array.from(sha256(shared).slice(0, 32));
           setSessionKey(key);
+          
+          // Extract peer's Instagram if provided
+          if (ev.instagram) {
+            setPeerInstagram(ev.instagram);
+            console.log('📸 Received peer Instagram:', ev.instagram);
+          }
+          
+          console.log('✅ Session key established!');
         } else if (ev.type === 'msg') {
           if (!sessionKey) return;
           const nonce = Uint8Array.from(Buffer.from(ev.nonce, 'base64'));
@@ -37,13 +65,26 @@ export default function Chat() {
           if (!plain) return;
           setMessages(prev => [...prev, { id: String(Math.random()), from: 'peer', text: Buffer.from(plain).toString('utf8') }]);
         }
-      } catch {}
+      } catch (err) {
+        console.error('Chat message parse error:', err);
+      }
     });
     clientRef.current = client;
-    // announce our pubkey
-    const keyB64 = Buffer.from(keyPair.publicKey).toString('base64');
-    // slight delay to ensure ws open
-    setTimeout(() => client.send({ session_id: sessionId, ciphertext: JSON.stringify({ type: 'pubkey', key: keyB64 }), nonce: '', ts: Date.now() }), 200);
+    
+    // announce our pubkey and Instagram
+    setTimeout(async () => {
+      const profile = await loadProfile();
+      const keyB64 = Buffer.from(keyPair.publicKey).toString('base64');
+      const payload: any = { type: 'pubkey', key: keyB64 };
+      
+      if (profile?.socials_encrypted) {
+        payload.instagram = profile.socials_encrypted;
+      }
+      
+      console.log('📤 Sending our public key and Instagram to session');
+      client.send({ session_id: sessionId, ciphertext: JSON.stringify(payload), nonce: '', ts: Date.now() });
+    }, 200);
+    
     return () => client.close();
   }, [sessionId]);
 
@@ -76,9 +117,14 @@ export default function Chat() {
       >
         {/* Close branding header */}
         <View style={styles.chatHeader}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.brandText}>Close</Text>
             <Text style={styles.sessionId}>Session: {sessionId.slice(0, 8)}</Text>
+            {peerInstagram && (
+              <TouchableOpacity onPress={() => Linking.openURL(`https://instagram.com/${peerInstagram.replace('@', '')}`)}>
+                <Text style={styles.instagramText}>📸 {peerInstagram}</Text>
+              </TouchableOpacity>
+            )}
           </View>
           <View style={styles.statusContainer}>
             <View style={[styles.statusDot, sessionKey ? styles.statusConnected : styles.statusWaiting]} />
@@ -144,6 +190,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: 'Courier',
     marginTop: 2,
+  },
+  instagramText: {
+    color: '#0066ff',
+    fontSize: 14,
+    marginTop: 6,
+    fontWeight: '600',
   },
   statusContainer: {
     flexDirection: 'row',

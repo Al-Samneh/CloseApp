@@ -18,18 +18,22 @@ async def ws_endpoint(ws: WebSocket, session_id: str):
     if session_id not in sessions:
         sessions[session_id] = set()
     sessions[session_id].add(ws)
+    print(f"💬 Chat user joined session: {session_id}, Total in session: {len(sessions[session_id])}")
     try:
         while True:
             msg = await ws.receive_text()
+            print(f"📨 Chat message in {session_id}, relaying to {len(sessions.get(session_id, set())) - 1} peers")
             for peer in list(sessions.get(session_id, set())):
                 if peer is ws:
                     continue
                 try:
                     await peer.send_text(msg)
+                    print(f"✅ Relayed to peer")
                 except WebSocketDisconnect:
                     sessions[session_id].discard(peer)
     except WebSocketDisconnect:
         sessions[session_id].discard(ws)
+        print(f"💬 User left session: {session_id}, Remaining: {len(sessions[session_id])}")
 
 @app.websocket("/link-requests/{ephemeral_id}")
 async def link_requests_endpoint(ws: WebSocket, ephemeral_id: str):

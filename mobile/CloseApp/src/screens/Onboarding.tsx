@@ -8,6 +8,8 @@ export default function Onboarding() {
   const nav = useNavigation<any>();
   const [name, setName] = useState('');
   const [age, setAge] = useState('25');
+  const [gender, setGender] = useState<'male' | 'female' | 'other'>('other');
+  const [instagram, setInstagram] = useState('');
   const [bio, setBio] = useState('');
   const [interests, setInterests] = useState('music,books');
   const insets = useSafeAreaInsets();
@@ -16,6 +18,8 @@ export default function Onboarding() {
     const p = createEmptyProfile();
     p.name = name.trim();
     p.age = Number(age) || 18;
+    p.sex = gender;
+    p.socials_encrypted = instagram.trim() ? `@${instagram.trim().replace('@', '')}` : undefined;
     p.bio = bio;
     p.interests = interests.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     await saveProfile(p as any);
@@ -45,6 +49,33 @@ export default function Onboarding() {
           <View style={styles.group}>
             <Text style={styles.label}>Age</Text>
             <TextInput placeholder="25" value={age} onChangeText={setAge} keyboardType="number-pad" style={styles.input} placeholderTextColor="#666" />
+          </View>
+          <View style={styles.group}>
+            <Text style={styles.label}>Gender</Text>
+            <View style={styles.genderButtons}>
+              <TouchableOpacity 
+                style={[styles.genderButton, gender === 'male' && styles.genderButtonActive]} 
+                onPress={() => setGender('male')}
+              >
+                <Text style={[styles.genderButtonText, gender === 'male' && styles.genderButtonTextActive]}>Male</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.genderButton, gender === 'female' && styles.genderButtonActive]} 
+                onPress={() => setGender('female')}
+              >
+                <Text style={[styles.genderButtonText, gender === 'female' && styles.genderButtonTextActive]}>Female</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.genderButton, gender === 'other' && styles.genderButtonActive]} 
+                onPress={() => setGender('other')}
+              >
+                <Text style={[styles.genderButtonText, gender === 'other' && styles.genderButtonTextActive]}>Other</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+          <View style={styles.group}>
+            <Text style={styles.label}>Instagram (optional)</Text>
+            <TextInput placeholder="username" value={instagram} onChangeText={setInstagram} style={styles.input} placeholderTextColor="#666" autoCapitalize="none" />
           </View>
           <View style={styles.group}>
             <Text style={styles.label}>Bio</Text>
@@ -106,6 +137,32 @@ const styles = StyleSheet.create({
   continueButtonText: {
     color: '#fff',
     fontSize: 17,
+    fontWeight: '600',
+  },
+  genderButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  genderButton: {
+    flex: 1,
+    backgroundColor: '#1a1a1a',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#1a1a1a',
+  },
+  genderButtonActive: {
+    backgroundColor: '#0066ff15',
+    borderColor: '#0066ff',
+  },
+  genderButtonText: {
+    color: '#888',
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  genderButtonTextActive: {
+    color: '#0066ff',
     fontWeight: '600',
   },
 });

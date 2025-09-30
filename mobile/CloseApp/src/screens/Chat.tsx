@@ -1,5 +1,7 @@
+import 'react-native-get-random-values';
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, FlatList, Alert } from 'react-native';
+import { View, Text, TextInput, StyleSheet, FlatList, Alert, KeyboardAvoidingView, Platform, TouchableOpacity } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RouteProp, useRoute } from '@react-navigation/native';
 import { RelayClient } from '../network/ws';
 import nacl from 'tweetnacl';
@@ -15,6 +17,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<{ id: string; from: 'me' | 'peer'; text: string }[]>([]);
   const [keyPair] = useState(() => nacl.box.keyPair());
   const [sessionKey, setSessionKey] = useState<Uint8Array | null>(null);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     const client = new RelayClient('ws://192.168.1.216:8080/ws/' + sessionId);
@@ -48,7 +51,11 @@ export default function Chat() {
     const text = input.trim();
     if (!text) return;
     if (!sessionKey) {
-      Alert.alert('Establishing secure session. Please wait a moment.');
+      Alert.alert(
+        'No Connection', 
+        'Waiting for the other person to join this chat.\n\nSession ID: ' + sessionId + '\n\nThey need to also click "Send Link" to connect.',
+        [{ text: 'OK' }]
+      );
       return;
     }
     const nonce = new Uint8Array(nacl.box.nonceLength);
@@ -61,31 +68,150 @@ export default function Chat() {
   };
 
   return (
-    <View style={styles.container}>
-      <FlatList
-        data={messages}
-        keyExtractor={x => x.id}
-        renderItem={({ item }) => (
-          <View style={[styles.bubble, item.from === 'me' ? styles.me : styles.peer]}>
-            <Text style={styles.text}>{item.text}</Text>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={insets.top}
+      >
+        {/* Close branding header */}
+        <View style={styles.chatHeader}>
+          <View>
+            <Text style={styles.brandText}>Close</Text>
+            <Text style={styles.sessionId}>Session: {sessionId.slice(0, 8)}</Text>
           </View>
-        )}
-      />
-      <View style={styles.composer}>
-        <TextInput style={styles.input} value={input} onChangeText={setInput} placeholder="Message" placeholderTextColor="#666" />
-        <Button title="Send" onPress={send} />
-      </View>
-    </View>
+          <View style={styles.statusContainer}>
+            <View style={[styles.statusDot, sessionKey ? styles.statusConnected : styles.statusWaiting]} />
+            <Text style={styles.statusText}>{sessionKey ? 'Connected' : 'Waiting...'}</Text>
+          </View>
+        </View>
+
+        <FlatList
+          data={messages}
+          keyExtractor={x => x.id}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={{
+            paddingTop: 12,
+            paddingHorizontal: 16,
+            paddingBottom: 8 + insets.bottom + 60,
+          }}
+          renderItem={({ item }) => (
+            <View style={[styles.bubble, item.from === 'me' ? styles.me : styles.peer]}>
+              <Text style={styles.text}>{item.text}</Text>
+            </View>
+          )}
+        />
+        <View style={[styles.composer, { paddingBottom: 12 + insets.bottom }]}>
+          <TextInput
+            style={styles.input}
+            value={input}
+            onChangeText={setInput}
+            placeholder="Message"
+            placeholderTextColor="#666"
+          />
+          <TouchableOpacity style={styles.sendButton} onPress={send}>
+            <Text style={styles.sendButtonText}>Send</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0e0e0e' },
-  bubble: { padding: 10, margin: 8, borderRadius: 12, maxWidth: '80%' },
-  me: { backgroundColor: '#2a2a2a', alignSelf: 'flex-end' },
-  peer: { backgroundColor: '#1a1a1a', alignSelf: 'flex-start' },
-  text: { color: '#fff' },
-  composer: { flexDirection: 'row', gap: 8, padding: 8, borderTopColor: '#222', borderTopWidth: 1 },
-  input: { flex: 1, backgroundColor: '#1a1a1a', color: '#fff', paddingHorizontal: 12, borderRadius: 8 },
+  safeArea: { flex: 1, backgroundColor: '#0a0a0a' },
+  container: { flex: 1, backgroundColor: '#0a0a0a' },
+  chatHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1a1a1a',
+    backgroundColor: '#0f0f0f',
+  },
+  brandText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  sessionId: {
+    color: '#666',
+    fontSize: 12,
+    fontFamily: 'Courier',
+    marginTop: 2,
+  },
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusConnected: {
+    backgroundColor: '#34c759',
+  },
+  statusWaiting: {
+    backgroundColor: '#ff9500',
+  },
+  statusText: {
+    color: '#aaa',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  bubble: { 
+    padding: 12, 
+    margin: 6, 
+    borderRadius: 16, 
+    maxWidth: '75%',
+  },
+  me: { 
+    backgroundColor: '#0066ff', 
+    alignSelf: 'flex-end',
+    borderBottomRightRadius: 4,
+  },
+  peer: { 
+    backgroundColor: '#1a1a1a', 
+    alignSelf: 'flex-start',
+    borderBottomLeftRadius: 4,
+  },
+  text: { color: '#fff', fontSize: 16, lineHeight: 20 },
+  composer: { 
+    flexDirection: 'row', 
+    gap: 10, 
+    paddingHorizontal: 16, 
+    paddingTop: 12, 
+    borderTopColor: '#1a1a1a', 
+    borderTopWidth: 1, 
+    backgroundColor: '#0f0f0f',
+  },
+  input: { 
+    flex: 1, 
+    backgroundColor: '#1a1a1a', 
+    color: '#fff', 
+    paddingHorizontal: 16, 
+    paddingVertical: 12, 
+    borderRadius: 20,
+    fontSize: 16,
+  },
+  sendButton: {
+    backgroundColor: '#0066ff',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 20,
+    justifyContent: 'center',
+  },
+  sendButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
 });
 

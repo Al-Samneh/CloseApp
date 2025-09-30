@@ -26,22 +26,23 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-	  <!-- Do not change NSAllowsArbitraryLoads to true, or you will risk app rejection! -->
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Close uses Bluetooth to discover nearby users. Location permission may be required by iOS for Bluetooth scans to function.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Close uses Bluetooth in the background to discover nearby users using ephemeral identifiers. No personal data is broadcast.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Close advertises a tiny ephemeral token over Bluetooth to enable discovery.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Close uses Bluetooth to discover nearby users. Location permission may be required by iOS for Bluetooth scans to function.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
+		<string>fetch</string>
+		<string>processing</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

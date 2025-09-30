@@ -1,4 +1,5 @@
 import DeviceInfo from 'react-native-device-info';
+import { Buffer } from 'buffer';
 import { bleManager } from './index';
 import { buildInterestFingerprint } from '../utils/fingerprint';
 import { deriveEphemeralId } from '../utils/ephemeralId';
@@ -13,6 +14,7 @@ export class BleOrchestrator {
   private currentPayload?: Uint8Array;
   private timer?: NodeJS.Timeout;
   private onCandidate?: (disc: Discovered) => void;
+  public myEphemeralId: string = '';
 
   constructor(deviceSecret: Uint8Array) {
     this.deviceSecret = deviceSecret;
@@ -20,8 +22,11 @@ export class BleOrchestrator {
 
   start(profile: Profile, onCandidate: (disc: Discovered) => void) {
     this.onCandidate = onCandidate;
-    this.buildAndAdvertise(profile);
-    this.timer = setInterval(() => this.buildAndAdvertise(profile), this.rotationMinutes * 60 * 1000);
+    // fire-and-forget with error handling to avoid unhandled promise rejections
+    void this.buildAndAdvertise(profile).catch(err => console.warn('BLE build/advertise error', err));
+    this.timer = setInterval(() => {
+      void this.buildAndAdvertise(profile).catch(err => console.warn('BLE build/advertise error (timer)', err));
+    }, this.rotationMinutes * 60 * 1000);
     bleManager.startScanning(ev => {
       const data = Buffer.from(ev.payloadBase64, 'base64');
       const payload = unpackPayload(new Uint8Array(data));
@@ -40,10 +45,20 @@ export class BleOrchestrator {
     const deviceUuid = await DeviceInfo.getUniqueId();
     const epoch = Math.floor(Date.now() / (this.rotationMinutes * 60 * 1000));
     const eph = deriveEphemeralId(deviceUuid, epoch, this.deviceSecret);
+    
+    // Store our ephemeral ID as hex string
+    this.myEphemeralId = Buffer.from(eph).toString('hex').slice(0, 12);
+    console.log('📱 My Ephemeral ID:', this.myEphemeralId);
+    
     const fp = buildInterestFingerprint(profile.interests, this.deviceSecret);
     const payload = packPayload({ version: 1, ephemeralId: eph, fingerprint: fp.obfuscated, flags: 0 });
     this.currentPayload = payload;
-    bleManager.startAdvertising(payload);
+    try {
+      bleManager.startAdvertising(payload);
+    } catch (err) {
+      console.warn('BLE startAdvertising error', err);
+      throw err;
+    }
   }
 }
 

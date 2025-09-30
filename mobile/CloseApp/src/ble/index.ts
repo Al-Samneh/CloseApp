@@ -5,18 +5,33 @@ type CandidateEvent = { payloadBase64: string; rssi: number };
 
 type Listener = (ev: CandidateEvent) => void;
 
-const BLEModule = NativeModules.BLEModule;
+const BLEModule: any | undefined = (NativeModules as any)?.BLEModule;
+const isNativeBleAvailable = (Platform.OS === 'ios' || Platform.OS === 'android') && !!BLEModule;
 
 class BleManager {
   private emitter?: NativeEventEmitter;
   private sub?: any;
+  private stateSub?: any;
 
   startScanning(cb: Listener) {
-    if (Platform.OS === 'ios' || Platform.OS === 'android') {
-      this.emitter = new NativeEventEmitter(BLEModule);
-      this.sub = this.emitter.addListener('BLEOnCandidate', cb);
-      BLEModule.startScanning();
+    if (isNativeBleAvailable) {
+      try {
+        this.emitter = new NativeEventEmitter(BLEModule);
+        this.sub = this.emitter.addListener('BLEOnCandidate', cb);
+        this.stateSub = this.emitter.addListener('BLEState', (s: any) => {
+          console.log('BLE state update', s);
+        });
+        BLEModule.startScanning();
+      } catch (err) {
+        console.warn('BLE startScanning error', err);
+        throw err;
+      }
     } else {
+      if (Platform.OS === 'ios' || Platform.OS === 'android') {
+        console.warn('BLE native module not available; scanning disabled on device build');
+        return;
+      }
+      // Non-native platforms (e.g., web/desktop dev): use simulated scanning
       simulatedBle.on('candidate', (c: any) => {
         const b64 = Buffer.from(c.payload).toString('base64');
         cb({ payloadBase64: b64, rssi: c.rssi });
@@ -26,24 +41,43 @@ class BleManager {
   }
 
   stopScanning() {
-    if (Platform.OS === 'ios' || Platform.OS === 'android') {
-      BLEModule.stopScanning();
+    if (isNativeBleAvailable) {
+      try {
+        BLEModule.stopScanning();
+      } catch (err) {
+        console.warn('BLE stopScanning error', err);
+      }
       this.sub?.remove?.();
+      this.stateSub?.remove?.();
     } else {
       simulatedBle.stopScanning();
     }
   }
 
   startAdvertising(payload: Uint8Array) {
-    if (Platform.OS === 'ios' || Platform.OS === 'android') {
+    if (isNativeBleAvailable) {
       const base64 = Buffer.from(payload).toString('base64');
-      BLEModule.startAdvertising(base64);
+      try {
+        BLEModule.startAdvertising(base64);
+      } catch (err) {
+        console.warn('BLE startAdvertising error', err);
+        throw err;
+      }
+    } else {
+      // No-op on non-native; we only simulate scanning events
+      if (Platform.OS === 'ios' || Platform.OS === 'android') {
+        console.warn('BLE native module not available; advertising disabled in this build');
+      }
     }
   }
 
   stopAdvertising() {
-    if (Platform.OS === 'ios' || Platform.OS === 'android') {
-      BLEModule.stopAdvertising();
+    if (isNativeBleAvailable) {
+      try {
+        BLEModule.stopAdvertising();
+      } catch (err) {
+        console.warn('BLE stopAdvertising error', err);
+      }
     }
   }
 }

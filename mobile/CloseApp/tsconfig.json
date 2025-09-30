@@ -1,0 +1,13 @@
+{
+  "extends": "@react-native/typescript-config/tsconfig.json",
+  "compilerOptions": {
+    "types": ["jest"],
+    "baseUrl": ".",
+    "paths": {
+      "@/utils/*": ["src/utils/*"],
+      "@/ble/*": ["src/ble/*"],
+      "@/crypto/*": ["src/crypto/*"],
+      "@/scoring/*": ["src/scoring/*"]
+    }
+  }
+}

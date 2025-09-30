@@ -17,7 +17,7 @@ export default function Chat() {
   const [sessionKey, setSessionKey] = useState<Uint8Array | null>(null);
 
   useEffect(() => {
-    const client = new RelayClient('ws://192.168.1.86:8080/ws/' + sessionId);
+    const client = new RelayClient('ws://192.168.1.216:8080/ws/' + sessionId);
     client.connect(raw => {
       try {
         const ev = JSON.parse(raw as any);

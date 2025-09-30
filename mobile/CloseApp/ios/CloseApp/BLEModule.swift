@@ -28,7 +28,6 @@ class BLEModule: RCTEventEmitter, CBCentralManagerDelegate, CBPeripheralManagerD
   @objc(startAdvertising:)
   func startAdvertising(_ payloadBase64: NSString) {
     guard let data = Data(base64Encoded: payloadBase64 as String) else { 
-      print("❌ BLE: Failed to decode base64 payload")
       return 
     }
     advertisePayload = data
@@ -41,10 +40,8 @@ class BLEModule: RCTEventEmitter, CBCentralManagerDelegate, CBPeripheralManagerD
         CBAdvertisementDataServiceUUIDsKey: [serviceUUID],
         CBAdvertisementDataLocalNameKey: localName
       ]
-      print("✅ BLE: Starting advertising with name: \(localName)")
       peripheralManager.startAdvertising(adv)
     } else {
-      print("⚠️ BLE: Cannot advertise, peripheral state: \(peripheralManager.state.rawValue)")
     }
   }
 
@@ -58,11 +55,9 @@ class BLEModule: RCTEventEmitter, CBCentralManagerDelegate, CBPeripheralManagerD
     if centralManager.state == .poweredOn {
       if !isScanning {
         isScanning = true
-        print("✅ BLE: Starting scan for service: \(serviceUUID)")
         centralManager.scanForPeripherals(withServices: [serviceUUID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
       }
     } else {
-      print("⚠️ BLE: Cannot scan, central state: \(centralManager.state.rawValue)")
       // Set flag; scanning will begin once state becomes poweredOn
       isScanning = true
     }
@@ -78,27 +73,21 @@ class BLEModule: RCTEventEmitter, CBCentralManagerDelegate, CBPeripheralManagerD
 
   // MARK: - CoreBluetooth delegates
   func centralManagerDidUpdateState(_ central: CBCentralManager) {
-    print("🔵 BLE: Central state changed to: \(central.state.rawValue)")
     // Don't send events during initialization - wait for JS to be ready
     if central.state == .poweredOn {
-      print("✅ BLE: Central is powered on")
       if isScanning {
-        print("✅ BLE: Auto-starting scan after power on")
         central.scanForPeripherals(withServices: [serviceUUID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
       }
     } else {
       if isScanning { 
-        print("⚠️ BLE: Stopping scan, central not powered on")
         central.stopScan() 
       }
     }
   }
 
   func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
-    print("🟣 BLE: Peripheral state changed to: \(peripheral.state.rawValue)")
     // Don't send events during initialization - wait for JS to be ready
     if peripheral.state != .poweredOn {
-      print("⚠️ BLE: Stopping advertising, peripheral not powered on")
       peripheral.stopAdvertising()
     } else if let data = advertisePayload {
       // Simple approach: encode payload as hex string in local name
@@ -108,18 +97,14 @@ class BLEModule: RCTEventEmitter, CBCentralManagerDelegate, CBPeripheralManagerD
         CBAdvertisementDataServiceUUIDsKey: [serviceUUID],
         CBAdvertisementDataLocalNameKey: localName
       ]
-      print("✅ BLE: Auto-starting advertising after power on: \(localName)")
       peripheral.startAdvertising(adv)
     }
   }
 
   func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
-    print("🔍 BLE: Discovered device! RSSI: \(RSSI), Data: \(advertisementData)")
-    
     // Read from local name (contains hex-encoded payload)
     if let localName = advertisementData[CBAdvertisementDataLocalNameKey] as? String,
        localName.hasPrefix("CL-") {
-      print("✅ BLE: Found Close device: \(localName)")
       // Extract hex string after "CL-" prefix
       let hexString = String(localName.dropFirst(3))
       // Convert hex string back to data
@@ -134,11 +119,8 @@ class BLEModule: RCTEventEmitter, CBCentralManagerDelegate, CBPeripheralManagerD
         index = nextIndex
       }
       let base64 = data.base64EncodedString()
-      print("📡 BLE: Sending candidate to JS: \(base64)")
       sendEvent(withName: "BLEOnCandidate", body: ["payloadBase64": base64, "rssi": RSSI.intValue])
-    } else {
-      print("⚠️ BLE: Device found but not a Close device (no CL- prefix)")
-    }
+    } else { }
   }
 }
 

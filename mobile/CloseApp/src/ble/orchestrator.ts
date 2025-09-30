@@ -23,9 +23,9 @@ export class BleOrchestrator {
   start(profile: Profile, onCandidate: (disc: Discovered) => void) {
     this.onCandidate = onCandidate;
     // fire-and-forget with error handling to avoid unhandled promise rejections
-    void this.buildAndAdvertise(profile).catch(err => console.warn('BLE build/advertise error', err));
+    void this.buildAndAdvertise(profile).catch(() => {});
     this.timer = setInterval(() => {
-      void this.buildAndAdvertise(profile).catch(err => console.warn('BLE build/advertise error (timer)', err));
+      void this.buildAndAdvertise(profile).catch(() => {});
     }, this.rotationMinutes * 60 * 1000);
     bleManager.startScanning(ev => {
       const data = Buffer.from(ev.payloadBase64, 'base64');
@@ -48,7 +48,7 @@ export class BleOrchestrator {
     
     // Store our ephemeral ID as hex string
     this.myEphemeralId = Buffer.from(eph).toString('hex').slice(0, 12);
-    console.log('📱 My Ephemeral ID:', this.myEphemeralId);
+    
     
     const fp = buildInterestFingerprint(profile.interests, this.deviceSecret);
     const payload = packPayload({ version: 1, ephemeralId: eph, fingerprint: fp.obfuscated, flags: 0 });
@@ -56,7 +56,7 @@ export class BleOrchestrator {
     try {
       bleManager.startAdvertising(payload);
     } catch (err) {
-      console.warn('BLE startAdvertising error', err);
+      
       throw err;
     }
   }

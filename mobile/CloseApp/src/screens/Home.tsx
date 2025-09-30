@@ -7,6 +7,7 @@ import { BleOrchestrator } from '../ble/orchestrator';
 import { useNavigation } from '@react-navigation/native';
 import { checkCompatibilityWithAI } from '../matching/ai';
 import type { Profile } from '../scoring/compatibility';
+import { compileProfile, fastCompatibilityScore, type CompiledProfile } from '../scoring/fast';
 import { LinkRequestManager, type LinkRequest } from '../network/linkRequests';
 
 type DeviceItem = { 
@@ -26,6 +27,8 @@ export default function Home() {
   const [ble, setBle] = useState<BleOrchestrator | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [myProfile, setMyProfile] = useState<Profile | null>(null);
+  const [myBio, setMyBio] = useState<string>('');
+  const [myCompiledProfile, setMyCompiledProfile] = useState<CompiledProfile | null>(null);
   const [myEphemeralId, setMyEphemeralId] = useState<string>('');
   const [incomingRequest, setIncomingRequest] = useState<LinkRequest | null>(null);
   const linkRequestManager = useRef<LinkRequestManager>(new LinkRequestManager());
@@ -46,6 +49,9 @@ export default function Home() {
           interests: p.interests,
         };
         setMyProfile(compatProfile);
+        const bio = p.bio || '';
+        setMyBio(bio);
+        setMyCompiledProfile(compileProfile({ ...compatProfile, bio }));
       }
     })();
     return () => {
@@ -117,20 +123,6 @@ export default function Home() {
                 { text: 'Accept', onPress: () => handleAcceptRequest(request) },
               ]
             );
-          },
-          (sessionId) => {
-            // Someone accepted our request!
-            console.log('🎉 Our request was accepted! Session ID:', sessionId);
-            Alert.alert(
-              '✅ Accepted!',
-              'They accepted your link request!',
-              [
-                { text: 'Go to Chat', onPress: () => {
-                  console.log('📱 Sender navigating to chat with session:', sessionId);
-                  nav.navigate('Chat' as never, { sessionId } as never);
-                }}
-              ]
-            );
           }
         );
       }, 100);
@@ -143,7 +135,7 @@ export default function Home() {
       
       setScanning(true);
     } catch (err: any) {
-      console.warn('Start/Stop scanning error', err);
+      
       const msg = err?.message || 'BLE Error: Make sure Bluetooth is enabled and permissions are granted';
       setErrorMsg(msg);
       Alert.alert('Bluetooth Error', msg + '\n\nTry:\n1. Enable Bluetooth in Settings\n2. Restart the app\n3. Check app permissions in Settings > Close');
@@ -163,7 +155,7 @@ export default function Home() {
     ));
 
     try {
-      // TODO: In a real implementation, we need to get the peer's profile
+      // In production, fetch the peer's profile from your backend or local cache
       // For now, create a mock peer profile for demonstration
       const mockPeerProfile: Profile = {
         age: 25,
@@ -172,35 +164,67 @@ export default function Home() {
         interests: ['music', 'hiking', 'books'],
       };
 
-      // Call AI to check compatibility
-      const result = await checkCompatibilityWithAI(myProfile, mockPeerProfile);
+      // AGE SAFETY CHECK
+      const ageDiff = Math.abs(myProfile.age - mockPeerProfile.age);
+      const myIsAdult = myProfile.age >= 18;
+      const peerIsAdult = mockPeerProfile.age >= 18;
+      
+      // Block if one is under 18 and other is adult, unless difference is ≤2 years
+      if (myIsAdult !== peerIsAdult && ageDiff > 2) {
+        setItems(prev => prev.map(item =>
+          item.id === id ? {
+            ...item,
+            isChecking: false,
+            compatibilityScore: 0,
+            compatibilityExplanation: 'Age incompatible',
+          } : item
+        ));
+        Alert.alert('❌ Incompatible', 'Age difference too large for safety.');
+        return;
+      }
+
+      // Fast path: precompiled masks and bitwise Jaccard
+      if (!myCompiledProfile) {
+        throw new Error('Profile not compiled');
+      }
+      const peerCompiled = compileProfile({ ...mockPeerProfile, bio: '' });
+      const fastScore01 = fastCompatibilityScore(myCompiledProfile, peerCompiled, { rssi: items.find(it => it.id === id)?.rssi ?? -65 });
+      const totalScore = Math.round(fastScore01 * 100);
+      
+      const shouldMatch = totalScore >= 35;
+
+      // Build explanation
+      const reasons = [];
+      if (totalScore >= 70) reasons.push('high shared interests');
+      if (ageDiff <= 2) reasons.push('close in age');
+      const explanation = reasons.length > 0 ? reasons.join(', ') : 'Low compatibility';
 
       // Update item with compatibility result
       setItems(prev => prev.map(item =>
         item.id === id ? {
           ...item,
           isChecking: false,
-          compatibilityScore: result.score,
-          compatibilityExplanation: result.explanation,
+          compatibilityScore: totalScore,
+          compatibilityExplanation: explanation,
         } : item
       ));
 
       // Show result to user
-      if (result.shouldMatch) {
+      if (shouldMatch) {
         Alert.alert(
           '✅ Great Match!',
-          `Compatibility: ${result.score}%\n\n${result.explanation}\n\nYou can now send a link request!`,
+          `Compatibility: ${totalScore}%\n\n${explanation.charAt(0).toUpperCase() + explanation.slice(1)}!\n\nYou can now send a link request!`,
           [{ text: 'OK' }]
         );
       } else {
         Alert.alert(
           '❌ Low Compatibility',
-          `Compatibility: ${result.score}%\n\n${result.explanation}`,
+          `Compatibility: ${totalScore}%\n\nNot enough in common.`,
           [{ text: 'OK' }]
         );
       }
     } catch (error) {
-      console.error('Compatibility check error:', error);
+      
       setItems(prev => prev.map(item =>
         item.id === id ? { ...item, isChecking: false } : item
       ));
@@ -220,7 +244,7 @@ export default function Home() {
             try {
               // Generate a unique session ID for this chat
               const uniqueSessionId = `${myEphemeralId}-${id}-${Date.now()}`;
-              console.log('📤 Sending link request to:', id, 'from:', myEphemeralId, 'session:', uniqueSessionId);
+              
               linkRequestManager.current.sendLinkRequest(id, uniqueSessionId);
               
               // Save this session ID so we can join when they accept
@@ -228,9 +252,23 @@ export default function Home() {
                 item.id === id ? { ...item, pendingSessionId: uniqueSessionId } : item
               ));
               
-              Alert.alert('✅ Request Sent!', 'Waiting for them to accept...');
+              // Stop scanning before navigating to chat
+              if (scanning && ble) {
+                ble.stop();
+                linkRequestManager.current.disconnect();
+                if (cleanupTimerRef.current) {
+                  clearInterval(cleanupTimerRef.current);
+                  cleanupTimerRef.current = null;
+                }
+                setScanning(false);
+                
+              }
+              
+              // Navigate to chat immediately
+              
+              nav.navigate('Chat' as never, { sessionId: uniqueSessionId } as never);
             } catch (error) {
-              console.error('Failed to send link request:', error);
+              
               Alert.alert('Error', 'Failed to send link request. Please try again.');
             }
           },
@@ -242,14 +280,27 @@ export default function Home() {
   const handleAcceptRequest = (request: LinkRequest) => {
     setIncomingRequest(null);
     
-    console.log('✅ Accepting request, session ID:', request.from_session_id);
     
-    // Notify the sender that we accepted
-    linkRequestManager.current.respondToRequest(request.from_ephemeral_id, true, request.from_session_id);
+    
+    // Stop scanning before navigating to chat
+    if (scanning && ble) {
+      ble.stop();
+      linkRequestManager.current.disconnect();
+      if (cleanupTimerRef.current) {
+        clearInterval(cleanupTimerRef.current);
+        cleanupTimerRef.current = null;
+      }
+      setScanning(false);
+      
+    }
     
     // Navigate to chat with the session ID from the request
-    console.log('📱 Navigating to chat with session:', request.from_session_id);
-    nav.navigate('Chat' as never, { sessionId: request.from_session_id } as never);
+    // Use setTimeout to ensure UI updates complete before navigation
+    
+    setTimeout(() => {
+      
+      nav.navigate('Chat' as never, { sessionId: request.from_session_id } as never);
+    }, 100); // Small delay to ensure clean state transition
   };
 
   return (
@@ -294,7 +345,7 @@ export default function Home() {
                 <Text style={styles.id}>{item.id}</Text>
                 <Text style={styles.rowSub}>Signal {item.rssi} dBm</Text>
                 {item.compatibilityScore !== undefined && (
-                  <Text style={[styles.compatScore, item.compatibilityScore >= 70 ? styles.compatGood : styles.compatBad]}>
+                  <Text style={[styles.compatScore, item.compatibilityScore >= 35 ? styles.compatGood : styles.compatBad]}>
                     {item.compatibilityScore}% Match
                   </Text>
                 )}
@@ -312,7 +363,7 @@ export default function Home() {
                 <TouchableOpacity style={styles.checkButton} onPress={() => checkCompatibility(item.id)}>
                   <Text style={styles.checkButtonText}>Check Match</Text>
                 </TouchableOpacity>
-              ) : item.compatibilityScore >= 70 ? (
+              ) : item.compatibilityScore >= 35 ? (
                 <TouchableOpacity style={styles.linkButton} onPress={() => sendLinkRequest(item.id)}>
                   <Text style={styles.linkButtonText}>Send Link</Text>
                 </TouchableOpacity>

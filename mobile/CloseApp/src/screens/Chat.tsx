@@ -1,8 +1,8 @@
 import 'react-native-get-random-values';
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, StyleSheet, FlatList, Alert, KeyboardAvoidingView, Platform, TouchableOpacity, Linking } from 'react-native';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { View, Text, TextInput, StyleSheet, FlatList, Alert, KeyboardAvoidingView, Platform, TouchableOpacity, Linking, PanResponder } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { RouteProp, useRoute } from '@react-navigation/native';
+import { RouteProp, useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { RelayClient, type RelayMessage } from '../network/ws';
 import { loadProfile } from '../storage/profile';
 import nacl from 'tweetnacl';
@@ -12,8 +12,13 @@ type Params = { Chat: { sessionId: string } };
 
 export default function Chat() {
   const route = useRoute<RouteProp<Params, 'Chat'>>();
+  const nav = useNavigation<any>();
   const sessionId = route.params?.sessionId ?? 'unknown';
   const clientRef = useRef<RelayClient>();
+  const sessionKeyRef = useRef<Uint8Array | null>(null);
+  const myWantsToCloseRef = useRef(false);
+  const peerWantsToCloseRef = useRef(false);
+  const peerNameRef = useRef<string | null>(null);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<{ id: string; from: 'me' | 'peer'; text: string }[]>([]);
   const [keyPair] = useState(() => nacl.box.keyPair());
@@ -25,87 +30,282 @@ export default function Chat() {
   const [showInstagram, setShowInstagram] = useState(false);
   const [myWantsToClose, setMyWantsToClose] = useState(false);
   const [peerWantsToClose, setPeerWantsToClose] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
   const insets = useSafeAreaInsets();
 
-  useEffect(() => {
-    console.log('💬 Joining chat session:', sessionId);
-    
-    // Load our profile to get Instagram
-    loadProfile().then(profile => {
-      if (profile?.socials_encrypted) {
-        setMyInstagram(profile.socials_encrypted);
-      }
-    });
-    
-    const client = new RelayClient('ws://192.168.1.216:8080/ws/' + sessionId);
-    client.connect(relayMsg => {
-      try {
-        // Parse the ciphertext field to get the actual message
-        const ev = JSON.parse(relayMsg.ciphertext);
-        console.log('📨 Received chat event:', ev.type);
-        if (ev.type === 'pubkey') {
-          console.log('🔑 Received peer public key, establishing session');
-          const peerPub = Uint8Array.from(Buffer.from(ev.key, 'base64'));
-          const shared = nacl.scalarMult(keyPair.secretKey, peerPub);
-          const key = Uint8Array.from(sha256(shared).slice(0, 32));
-          setSessionKey(key);
-          
-          // Extract peer's Instagram if provided
-          if (ev.instagram) {
-            setPeerInstagram(ev.instagram);
-            console.log('📸 Received peer Instagram:', ev.instagram);
-          }
-          
-          console.log('✅ Session key established!');
-        } else if (ev.type === 'msg') {
-          if (!sessionKey) return;
-          const nonce = Uint8Array.from(Buffer.from(ev.nonce, 'base64'));
-          const box = Uint8Array.from(Buffer.from(ev.box, 'base64'));
-          const plain = nacl.secretbox.open(box, nonce, sessionKey);
-          if (!plain) return;
-          setMessages(prev => [...prev, { id: String(Math.random()), from: 'peer', text: Buffer.from(plain).toString('utf8') }]);
+  // Swipe down gesture to trigger "Come Closer"
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        // Only respond to swipe down gestures
+        return Math.abs(gestureState.dy) > 10;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        // Swipe down detected (dy > 50 pixels)
+        if (gestureState.dy > 50 && sessionKey) {
+          handleCloseRequest();
         }
-      } catch (err) {
-        console.error('Chat message parse error:', err);
+      },
+    })
+  ).current;
+
+  // When social is revealed, keep the chat open; user can tap the handle to open Instagram
+
+  const openInstagramProfile = async (handle: string) => {
+    try {
+      const username = handle.replace('@', '').trim();
+      const appUrl = `instagram://user?username=${username}`;
+      const webUrl = `https://instagram.com/${username}`;
+      const supported = await Linking.canOpenURL(appUrl);
+      if (supported) {
+        await Linking.openURL(appUrl);
+      } else {
+        await Linking.openURL(webUrl);
       }
-    });
-    clientRef.current = client;
+    } catch (e) {
+      const username = handle.replace('@', '').trim();
+      const fallbackUrl = `https://instagram.com/${username}`;
+      Linking.openURL(fallbackUrl);
+    }
+  };
+
+  useEffect(() => {
     
-    // announce our pubkey and Instagram
-    setTimeout(async () => {
+    
+    const { WS_BASE } = require('../config');
+    const client = new RelayClient(`${WS_BASE}/ws/${sessionId}`);
+    
+    // Load profile and prepare public key message
+    const sendPublicKey = async () => {
       const profile = await loadProfile();
+      if (profile) {
+        setMyName(profile.name);
+        if (profile.socials_encrypted) {
+          setMyInstagram(profile.socials_encrypted);
+        }
+      }
+      
       const keyB64 = Buffer.from(keyPair.publicKey).toString('base64');
       const payload: any = { type: 'pubkey', key: keyB64 };
       
+      if (profile?.name) {
+        payload.name = profile.name;
+      }
       if (profile?.socials_encrypted) {
         payload.instagram = profile.socials_encrypted;
       }
       
-      console.log('📤 Sending our public key and Instagram to session');
+      
       client.send({ session_id: sessionId, ciphertext: JSON.stringify(payload), nonce: '', ts: Date.now() });
-    }, 200);
+    };
     
-    return () => client.close();
-  }, [sessionId]);
+    client.connect(relayMsg => {
+      try {
+        // Parse the ciphertext field to get the actual message
+        const ev = JSON.parse(relayMsg.ciphertext);
+        
+        if (ev.type === 'pubkey') {
+          
+          
+          // Check if this is our FIRST time receiving a peer's public key
+          const isFirstHandshake = !sessionKeyRef.current;
+          
+          const peerPub = Uint8Array.from(Buffer.from(ev.key, 'base64'));
+          const shared = nacl.scalarMult(keyPair.secretKey, peerPub);
+          const key = Uint8Array.from(sha256(shared).slice(0, 32));
+          sessionKeyRef.current = key; // Store in ref for WebSocket handler
+          setSessionKey(key);
+          
+          // Extract peer's name and Instagram
+          if (ev.name) {
+            peerNameRef.current = ev.name;
+            setPeerName(ev.name);
+            
+          }
+          if (ev.instagram) {
+            setPeerInstagram(ev.instagram);
+            
+          }
+          
+          
+          
+          // IMPORTANT: Respond with our public key so they can establish their session too
+          // Only do this if this was our first handshake (prevents infinite loop)
+          if (isFirstHandshake) {
+            
+            loadProfile().then(profile => {
+              const keyB64 = Buffer.from(keyPair.publicKey).toString('base64');
+              const payload: any = { type: 'pubkey', key: keyB64 };
+              
+              if (profile?.name) {
+                payload.name = profile.name;
+              }
+              if (profile?.socials_encrypted) {
+                payload.instagram = profile.socials_encrypted;
+              }
+              
+              clientRef.current?.send({ 
+                session_id: sessionId, 
+                ciphertext: JSON.stringify(payload), 
+                nonce: '', 
+                ts: Date.now() 
+              });
+            });
+          } else {
+            
+          }
+        } else if (ev.type === 'msg') {
+          const currentKey = sessionKeyRef.current;
+          if (!currentKey) {
+            
+            return;
+          }
+          const nonce = Uint8Array.from(Buffer.from(ev.nonce, 'base64'));
+          const box = Uint8Array.from(Buffer.from(ev.box, 'base64'));
+          const plain = nacl.secretbox.open(box, nonce, currentKey);
+          if (!plain) {
+            
+            return;
+          }
+          setMessages(prev => [...prev, { id: String(Math.random()), from: 'peer', text: Buffer.from(plain).toString('utf8') }]);
+        } else if (ev.type === 'close_request') {
+          // Peer wants to "Come Closer"
+          peerWantsToCloseRef.current = true;
+          setPeerWantsToClose(true);
+          if (myWantsToCloseRef.current) {
+            // Both want to close - reveal Instagram and keep chat open
+            setShowInstagram(true);
+          } else {
+            // Ask this user if they want to come closer
+            Alert.alert(
+              '💫 Come Closer?',
+              `${peerNameRef.current || 'They'} wants to come closer and exchange social media. Do you want to?`,
+              [
+                { 
+                  text: 'No', 
+                  style: 'cancel',
+                  onPress: () => {
+                    // Send rejection
+                    clientRef.current?.send({ 
+                      session_id: sessionId, 
+                      ciphertext: JSON.stringify({ type: 'close_reject' }), 
+                      nonce: '', 
+                      ts: Date.now() 
+                    });
+                    Alert.alert('Disconnected', 'You chose not to come closer. Chat ended.', [
+                      { text: 'OK', onPress: () => nav.goBack() }
+                    ]);
+                  }
+                },
+                { 
+                  text: 'Yes!', 
+                  onPress: () => {
+                    myWantsToCloseRef.current = true;
+                    setMyWantsToClose(true);
+                    setShowInstagram(true);
+                    clientRef.current?.send({ 
+                      session_id: sessionId, 
+                      ciphertext: JSON.stringify({ type: 'close_accept' }), 
+                      nonce: '', 
+                      ts: Date.now() 
+                    });
+                    // Stay in chat; user can tap Instagram handle
+                  }
+                },
+              ]
+            );
+          }
+        } else if (ev.type === 'close_accept') {
+          // Peer accepted our request
+          setShowInstagram(true);
+        } else if (ev.type === 'close_reject') {
+          // Peer rejected
+          Alert.alert('Disconnected', 'They chose not to come closer. Chat ended.', [
+            { text: 'OK', onPress: () => nav.goBack() }
+          ]);
+        }
+      } catch (err) {
+        
+      }
+    }, () => {
+      // WebSocket connected callback
+      
+      setWsConnected(true);
+    });
+    clientRef.current = client;
+    
+    // Send public key immediately (will queue if WebSocket not open)
+    sendPublicKey().catch(() => {});
+    
+    return () => {
+      
+      client.close();
+    };
+  }, [sessionId]); // Only re-run if sessionId changes
 
   const send = () => {
     const text = input.trim();
     if (!text) return;
-    if (!sessionKey) {
+    const currentKey = sessionKeyRef.current;
+    if (!currentKey) {
+      const statusMsg = wsConnected 
+        ? 'WebSocket connected, but waiting for peer\'s public key...\n\nSession ID: ' + sessionId 
+        : 'Connecting to chat server...\n\nSession ID: ' + sessionId;
       Alert.alert(
-        'No Connection', 
-        'Waiting for the other person to join this chat.\n\nSession ID: ' + sessionId + '\n\nThey need to also click "Send Link" to connect.',
+        'No Session Key', 
+        statusMsg + '\n\nThey need to also accept the link request to connect.',
         [{ text: 'OK' }]
       );
       return;
     }
     const nonce = new Uint8Array(nacl.box.nonceLength);
     crypto.getRandomValues(nonce);
-    const box = nacl.secretbox(Uint8Array.from(Buffer.from(text, 'utf8')), nonce, sessionKey);
+    const box = nacl.secretbox(Uint8Array.from(Buffer.from(text, 'utf8')), nonce, currentKey);
     const payload = { type: 'msg', nonce: Buffer.from(nonce).toString('base64'), box: Buffer.from(box).toString('base64') };
     clientRef.current?.send({ session_id: sessionId, ciphertext: JSON.stringify(payload), nonce: '', ts: Date.now() });
     setMessages(prev => [...prev, { id: String(Math.random()), from: 'me', text }]);
     setInput('');
+  };
+
+  const handleCloseRequest = () => {
+    if (myWantsToCloseRef.current) {
+      Alert.alert('Already Requested', 'You already want to come closer. Waiting for them...');
+      return;
+    }
+    
+    Alert.alert(
+      '💫 Come Closer?',
+      'Request to exchange social media with this person?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Yes',
+          onPress: () => {
+            myWantsToCloseRef.current = true;
+            setMyWantsToClose(true);
+            clientRef.current?.send({ 
+              session_id: sessionId, 
+              ciphertext: JSON.stringify({ type: 'close_request' }), 
+              nonce: '', 
+              ts: Date.now() 
+            });
+            
+            if (peerWantsToCloseRef.current) {
+              // They already want to close too!
+              setShowInstagram(true);
+              Alert.alert('💫 Coming Closer!', 'You both agreed! Social media revealed.', [
+                { text: 'OK', onPress: () => {
+                  setTimeout(() => nav.goBack(), 500); // Brief delay to see the Instagram
+                }}
+              ]);
+            } else {
+              Alert.alert('Request Sent', 'Waiting for them to respond...');
+            }
+          }
+        }
+      ]
+    );
   };
 
   return (
@@ -113,23 +313,33 @@ export default function Chat() {
       <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={insets.top}
+        keyboardVerticalOffset={0}
       >
-        {/* Close branding header */}
-        <View style={styles.chatHeader}>
+        {/* Close branding header - swipe down to trigger "Come Closer" */}
+        <View style={styles.chatHeader} {...panResponder.panHandlers}>
           <View style={{ flex: 1 }}>
             <Text style={styles.brandText}>Close</Text>
-            <Text style={styles.sessionId}>Session: {sessionId.slice(0, 8)}</Text>
-            {peerInstagram && (
-              <TouchableOpacity onPress={() => Linking.openURL(`https://instagram.com/${peerInstagram.replace('@', '')}`)}>
+            {peerName ? (
+              <Text style={styles.peerName}>Chatting with {peerName}</Text>
+            ) : (
+              <Text style={styles.sessionId}>Session: {sessionId.slice(0, 8)}</Text>
+            )}
+            {showInstagram && peerInstagram && (
+              <TouchableOpacity onPress={() => openInstagramProfile(peerInstagram)}>
                 <Text style={styles.instagramText}>📸 {peerInstagram}</Text>
               </TouchableOpacity>
             )}
           </View>
-          <View style={styles.statusContainer}>
-            <View style={[styles.statusDot, sessionKey ? styles.statusConnected : styles.statusWaiting]} />
-            <Text style={styles.statusText}>{sessionKey ? 'Connected' : 'Waiting...'}</Text>
-          </View>
+          {sessionKey ? (
+            <TouchableOpacity style={styles.closeButton} onPress={handleCloseRequest}>
+              <Text style={styles.closeButtonText}>💫 Close</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.statusContainer}>
+              <View style={styles.statusWaiting} />
+              <Text style={styles.statusText}>Waiting...</Text>
+            </View>
+          )}
         </View>
 
         <FlatList
@@ -141,7 +351,7 @@ export default function Chat() {
           contentContainerStyle={{
             paddingTop: 12,
             paddingHorizontal: 16,
-            paddingBottom: 8 + insets.bottom + 60,
+            paddingBottom: 100,
           }}
           renderItem={({ item }) => (
             <View style={[styles.bubble, item.from === 'me' ? styles.me : styles.peer]}>
@@ -149,7 +359,7 @@ export default function Chat() {
             </View>
           )}
         />
-        <View style={[styles.composer, { paddingBottom: 12 + insets.bottom }]}>
+        <View style={[styles.composer]}>
           <TextInput
             style={styles.input}
             value={input}
@@ -191,10 +401,26 @@ const styles = StyleSheet.create({
     fontFamily: 'Courier',
     marginTop: 2,
   },
+  peerName: {
+    color: '#aaa',
+    fontSize: 14,
+    marginTop: 2,
+  },
   instagramText: {
     color: '#0066ff',
     fontSize: 14,
     marginTop: 6,
+    fontWeight: '600',
+  },
+  closeButton: {
+    backgroundColor: '#0066ff',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  closeButtonText: {
+    color: '#fff',
+    fontSize: 14,
     fontWeight: '600',
   },
   statusContainer: {
@@ -240,6 +466,7 @@ const styles = StyleSheet.create({
     gap: 10, 
     paddingHorizontal: 16, 
     paddingTop: 12, 
+    paddingBottom: 12, 
     borderTopColor: '#1a1a1a', 
     borderTopWidth: 1, 
     backgroundColor: '#0f0f0f',

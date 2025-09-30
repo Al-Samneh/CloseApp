@@ -1,0 +1,44 @@
+# Node / React Native
+node_modules/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.buckconfig.local
+.watchmanconfig
+metro-cache/
+
+# iOS
+mobile/CloseApp/ios/Pods/
+mobile/CloseApp/ios/build/
+mobile/CloseApp/ios/CloseApp/build/
+mobile/CloseApp/ios/CloseApp.xcworkspace/xcuserdata/
+mobile/CloseApp/ios/CloseApp.xcodeproj/project.xcworkspace/xcuserdata/
+DerivedData/
+
+# Android
+mobile/CloseApp/android/.gradle/
+mobile/CloseApp/android/app/build/
+mobile/CloseApp/android/build/
+
+# Xcode user data
+**/*.xcuserdatad/
+**/*.xcscmblueprint
+
+# Python
+server/venv/
+server/.venv/
+__pycache__/
+*.pyc
+
+# Misc
+.DS_Store
+.env
+.env.*
+
+# Jest / Coverage
+coverage/
+*.lcov
+
+# Generated iOS codegen
+mobile/CloseApp/ios/build/generated/

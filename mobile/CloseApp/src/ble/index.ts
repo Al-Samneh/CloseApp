@@ -19,16 +19,16 @@ class BleManager {
         this.emitter = new NativeEventEmitter(BLEModule);
         this.sub = this.emitter.addListener('BLEOnCandidate', cb);
         this.stateSub = this.emitter.addListener('BLEState', (s: any) => {
-          console.log('BLE state update', s);
+          
         });
         BLEModule.startScanning();
       } catch (err) {
-        console.warn('BLE startScanning error', err);
+        
         throw err;
       }
     } else {
       if (Platform.OS === 'ios' || Platform.OS === 'android') {
-        console.warn('BLE native module not available; scanning disabled on device build');
+        
         return;
       }
       // Non-native platforms (e.g., web/desktop dev): use simulated scanning
@@ -45,7 +45,7 @@ class BleManager {
       try {
         BLEModule.stopScanning();
       } catch (err) {
-        console.warn('BLE stopScanning error', err);
+        
       }
       this.sub?.remove?.();
       this.stateSub?.remove?.();
@@ -60,13 +60,13 @@ class BleManager {
       try {
         BLEModule.startAdvertising(base64);
       } catch (err) {
-        console.warn('BLE startAdvertising error', err);
+        
         throw err;
       }
     } else {
       // No-op on non-native; we only simulate scanning events
       if (Platform.OS === 'ios' || Platform.OS === 'android') {
-        console.warn('BLE native module not available; advertising disabled in this build');
+        
       }
     }
   }
@@ -76,7 +76,7 @@ class BleManager {
       try {
         BLEModule.stopAdvertising();
       } catch (err) {
-        console.warn('BLE stopAdvertising error', err);
+        
       }
     }
   }

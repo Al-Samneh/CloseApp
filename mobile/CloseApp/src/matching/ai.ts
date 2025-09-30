@@ -1,7 +1,11 @@
 import { Profile } from '../scoring/compatibility';
 
-const OPENROUTER_API_KEY = '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'; // TODO: Replace with your OpenRouter API key
-const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1/chat/completions';
+// Removed due to it taking a long time to connect, inefficient if we're using BLE
+
+
+// Removed API usage from client app. Keep server-side if needed.
+const OPENROUTER_API_KEY = '';
+const OPENROUTER_BASE_URL = '';
 
 export type CompatibilityResult = {
   score: number; // 0-100
@@ -28,7 +32,7 @@ Reply ONLY with a number 0-100. No text, no explanation, just the number.`;
         'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': 'https://close.app', // Optional: for OpenRouter analytics
-        'X-Title': 'Close Dating App', // Optional: for OpenRouter analytics
+        'X-Title': 'Close App', // Optional: for OpenRouter analytics
       },
       body: JSON.stringify({
         model: 'x-ai/grok-4-fast:free', // Free tier model
@@ -45,14 +49,14 @@ Reply ONLY with a number 0-100. No text, no explanation, just the number.`;
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('OpenRouter error:', response.status, errorText);
+      
       throw new Error(`OpenRouter API error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
     const content = data.choices[0].message.content.trim();
     
-    console.log('AI response:', content);
+    
 
     // Extract just the number from the response
     const numberMatch = content.match(/\d+/);
@@ -67,7 +71,6 @@ Reply ONLY with a number 0-100. No text, no explanation, just the number.`;
       shouldMatch: finalScore >= 70,
     };
   } catch (error) {
-    console.error('AI compatibility check failed:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     // Fallback: use basic algorithm
     return {
